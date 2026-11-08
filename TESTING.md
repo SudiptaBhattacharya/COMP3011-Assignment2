@@ -116,3 +116,26 @@ Conflicting monitors:
 ```
 
 **Expected:** Each command ends with `BUILD SUCCESS`.
+
+## Part 2: Single-threaded baseline
+
+Recorded on 9 November 2026 before changing the model. The full-stack run completed with Maven `BUILD SUCCESS`.
+
+**Command used:**
+
+```sh
+./mvnw javafx:run \
+  '-Djavafx.args=-a -nssnfwyvdjmbp /Users/sudiptabhattacharyareet/Downloads/simpsons.mp4'
+```
+
+| Measure | Baseline observation |
+| --- | --- |
+| Computer | Apple M3 Mac (`Mac15,13`), macOS on arm64 |
+| Available processors | 8 logical processors (`hw.ncpu`) |
+| Applied effects | 13 instances, in order: NUMBER, SCRATCH, SCRATCH, NUMBER, FLICKER, BLACK_AND_WHITE, YELLOW, VIGNETTE, DUST, JITTER, MOTTLE, BLEED, PEPPER |
+| Audio stalls | Not independently observed; requires a listener at the computer. |
+| Visibly uneven playback | Not independently observed; requires viewing the player during playback. |
+| Frame headroom | Initially negative, from about -8.7 seconds to -0.2 seconds; subsequently mostly positive at about +2 to +22 ms per frame, against a 41.7 ms frame interval. |
+| Player CPU usage | Approximately 55–78% in sampled `ps` readings (macOS process percentage, where 100% is one logical processor). |
+
+The initial negative headroom readings show the prepared frames were late relative to their target display times. Later positive readings show frames were prepared before their target times. The audio and visible-smoothness fields should be updated after direct observation; console output alone cannot establish either result.
