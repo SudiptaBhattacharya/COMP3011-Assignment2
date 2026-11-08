@@ -4,7 +4,7 @@ For the assignment specification and setup information, see the [COMP3011 Assign
 
 ## Project overview
 
-This project extends the supplied single-threaded JavaFX video player. Specification Part 1 adds command-line selection of frame-processing effects. Selected effects run in command-line order, and the same effect may be selected more than once.
+This project extends the supplied JavaFX video player. Part 1 adds command-line selection of frame effects in the requested order, including repeated effects. Part 2 processes independent video frames concurrently on a bounded platform-thread pool while keeping display order and the original controls.
 
 ## Requirements
 
@@ -17,8 +17,10 @@ This project extends the supplied single-threaded JavaFX video player. Specifica
 From the project root, run:
 
 ```sh
-./mvnw clean test
+./mvnw clean validate
+./mvnw test
 ./mvnw package
+./mvnw verify
 ```
 
 ## Run the application
@@ -91,28 +93,22 @@ Full Part 1 effect stack:
 
 ## Design summary
 
-`CommandLineController` parses launch options and records frame-effect selections in order as `FrameProcessorType` values. `VideoPlayerApp` passes that list to `VideoPlayerController`, which passes it to `VideoPlayerModel`. The model creates and owns a separate `FrameProcessor` instance for each selection. Existing `FrameProcessor` subclasses perform the effects.
+`CommandLineController` parses launch options and records frame-effect selections in order as `FrameProcessorType` values. `VideoPlayerApp` passes that list through `VideoPlayerController` to `VideoPlayerModel`. The model retains a separate processor prototype for every selection, including duplicates.
 
-This keeps parsing separate from effect creation and execution. The ordered list also preserves repeated selections and provides a straightforward place to add further effect types.
+For Part 2, `VideoPlayerModel` decodes on the JavaFX thread and deep-clones each image frame before submitting it to `OrderedFrameExecutor`. JavaCV's grabber can reuse its buffers, so a worker must own its frame data. Four platform workers are used on an eight-processor machine; the count is `max(1, min(4, availableProcessors - 2))`. At most twice the worker count of frames may be in flight. Each worker has an independent processor chain with the original effect-instance seed indices. Effects within a frame run sequentially; separate frames may run concurrently.
+
+Results are collected in submission order, then converted to JavaFX images and displayed according to the playback clock. Seek, restart, stop and new playback cancel pending jobs and advance a generation, preventing old results from appearing. Shutdown cancels work and stops the executor without waiting on the JavaFX thread. The existing audio, sizing and keyboard paths remain wired through the controller.
 
 ## Testing
 
-Completing these Part 1 manual checks; check TESTING.md for detailed Testing documentations:
+Run the automated and manual checks in [TESTING.md](TESTING.md). The Maven unit tests cover parsing, frame ownership, deterministic concurrent output, ordered completion, the in-flight limit, cancellation, shutdown, and worker failures. `./mvnw verify` also runs an effect-processing comparison on identical frames with one sequential chain, four workers and seven workers. On this machine it uses `~/Downloads/simpsons.mp4` if available; set `-Dcomp3011.benchmarkVideo=/absolute/path/to/video.mp4` to choose another file. If no video is available, the benchmark uses synthetic frames. It checks output equality and reports times; it does not assert a speedup.
 
-- Normal playback without effects, including audio
-- Short and long options for the same effect
-- Stacked short options
-- Mixed short and long options
-- Repeated effects and command-line ordering
-- Invalid option, missing video, and conflicting monitor handling
-- Maven `clean test` and `package` commands
-
-The model prints frame headroom during playback. A positive value means the frame was prepared before its target display time; a negative value means it missed that deadline. See [TESTING.md](TESTING.md) for the Part 1 command-by-command checklist and expected results. There is currently no `src/test` directory, so `mvn test` does not run repository-provided automated tests.
+The model prints frame headroom during playback. Positive values mean a frame was prepared before its target display time; negative values mean it was late. Headroom, effect throughput, audio continuity and visible smoothness measure different aspects of performance. A short positive sample alone does not establish an end-to-end speedup.
 
 ## Current project status
 
-Specification Part 1 is implemented. Specification Part 2, multithreaded frame-processing performance, is the next development stage.
+Part 1 and the bounded Part 2 frame-processing architecture are implemented. Direct visual, audio and interactive checks, plus a controlled end-to-end comparison against the single-threaded player, remain part of the verification procedure in [TESTING.md](TESTING.md).
 
 ## AI-use disclosure
 
-Generative AI was used as a learning and development aid for understanding Java/Maven errors, command-line parsing design, documentation structure, and test planning. Generated suggestions were reviewed, adapted, compiled, and manually tested.
+Generative AI was used as a learning and development aid for command-line parsing, concurrency design, Java/Maven diagnostics, tests and documentation. Suggestions were reviewed against the project code, compiled, and checked with automated tests and playback smoke runs. Direct interactive observations are identified separately in the testing record.

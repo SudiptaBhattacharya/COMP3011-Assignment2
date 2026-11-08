@@ -51,6 +51,14 @@ public class FramePepperer extends FrameProcessor {
         instanceIndex = nextInstanceIndex++;
     }
 
+    FramePepperer(int instanceIndex) {
+        this.instanceIndex = instanceIndex;
+    }
+
+    int instanceIndex() {
+        return instanceIndex;
+    }
+
     @Override
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);

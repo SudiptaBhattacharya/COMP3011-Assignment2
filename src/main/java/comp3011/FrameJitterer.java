@@ -41,6 +41,14 @@ public class FrameJitterer extends FrameProcessor {
         instanceIndex = nextInstanceIndex++;
     }
 
+    FrameJitterer(int instanceIndex) {
+        this.instanceIndex = instanceIndex;
+    }
+
+    int instanceIndex() {
+        return instanceIndex;
+    }
+
     @Override
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);

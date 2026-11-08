@@ -77,6 +77,14 @@ public class FrameMottler extends FrameProcessor {
         instanceIndex = nextInstanceIndex++;
     }
 
+    FrameMottler(int instanceIndex) {
+        this.instanceIndex = instanceIndex;
+    }
+
+    int instanceIndex() {
+        return instanceIndex;
+    }
+
     @Override
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);

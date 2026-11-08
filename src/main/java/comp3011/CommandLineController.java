@@ -88,14 +88,14 @@ public class CommandLineController {
 
     private void parse() {
         List<String> videoFiles = new ArrayList<>();
-        
         boolean optionsFinished = false;
-        
-        for (String arg : args) {
-            if (errorMessage != null) {
-                break;
-            }
 
+        for (String arg : args) {
+            /*
+             * Do not stop parsing after an error. A later -h or --help must still
+             * be recognised so that help is displayed, while the original error
+             * continues to determine the non-zero exit status.
+             */
             if (optionsFinished) {
                 videoFiles.add(arg);
             } else if ("--".equals(arg)) {
@@ -109,16 +109,17 @@ public class CommandLineController {
             }
         }
 
+        /*
+         * Preserve an option-parsing error as the first and most useful error,
+         * but only after every argument has been inspected for help.
+         */
         if (errorMessage != null) {
             return;
         }
 
         if (videoFiles.size() > 1) {
             setError("Usage: VideoPlayer [options] [video-file]");
-            return;
-        }
-
-        if (videoFiles.size() == 1) {
+        } else if (videoFiles.size() == 1) {
             videoFile = new File(videoFiles.getFirst());
 
             if (!videoFile.isFile()) {
@@ -173,7 +174,7 @@ public class CommandLineController {
      */
     private void parseShortOptions(String option) {
         for (int index = 1;
-                index < option.length() && errorMessage == null;
+                index < option.length();
                 index++) {
 
             char shortOption = option.charAt(index);
