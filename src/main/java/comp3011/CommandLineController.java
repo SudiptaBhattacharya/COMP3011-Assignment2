@@ -141,4 +141,127 @@ public class CommandLineController {
             case "--number-frames" ->
                     addProcessor(FrameProcessorType.NUMBER);
             case "--scratch-frames" ->
-                    addProcessor(
+                    addProcessor(FrameProcessorType.SCRATCH);
+            case "--flicker-frames" ->
+                    addProcessor(FrameProcessorType.FLICKER);
+            case "--black-and-white" ->
+                    addProcessor(FrameProcessorType.BLACK_AND_WHITE);
+            case "--yellow-frames" ->
+                    addProcessor(FrameProcessorType.YELLOW);
+            case "--vignette-frames" ->
+                    addProcessor(FrameProcessorType.VIGNETTE);
+            case "--dust-frames" ->
+                    addProcessor(FrameProcessorType.DUST);
+            case "--jitter-frames" ->
+                    addProcessor(FrameProcessorType.JITTER);
+            case "--mottle-frames" ->
+                    addProcessor(FrameProcessorType.MOTTLE);
+            case "--bleed-frames" ->
+                    addProcessor(FrameProcessorType.BLEED);
+            case "--pepper-frames" ->
+                    addProcessor(FrameProcessorType.PEPPER);
+
+            default -> setError("Unknown option: " + option);
+        }
+    }
+
+    /**
+     * Parses every character after the leading dash independently.
+     *
+     * For example, -nssnf is interpreted as:
+     * number, scratch, scratch, number, flicker.
+     */
+    private void parseShortOptions(String option) {
+        for (int index = 1;
+                index < option.length() && errorMessage == null;
+                index++) {
+
+            char shortOption = option.charAt(index);
+
+            switch (shortOption) {
+                case 'h' -> helpRequested = true;
+                case 'a' -> audioRequested = true;
+                case 'x' -> maximiseRequested = true;
+                case '1' -> setDisplayId(1);
+                case '2' -> setDisplayId(2);
+
+                case 'n' -> addProcessor(FrameProcessorType.NUMBER);
+                case 's' -> addProcessor(FrameProcessorType.SCRATCH);
+                case 'f' -> addProcessor(FrameProcessorType.FLICKER);
+                case 'w' ->
+                        addProcessor(FrameProcessorType.BLACK_AND_WHITE);
+                case 'y' -> addProcessor(FrameProcessorType.YELLOW);
+                case 'v' -> addProcessor(FrameProcessorType.VIGNETTE);
+                case 'd' -> addProcessor(FrameProcessorType.DUST);
+                case 'j' -> addProcessor(FrameProcessorType.JITTER);
+                case 'm' -> addProcessor(FrameProcessorType.MOTTLE);
+                case 'b' -> addProcessor(FrameProcessorType.BLEED);
+                case 'p' -> addProcessor(FrameProcessorType.PEPPER);
+
+                default -> setError("Unknown option: -" + shortOption);
+            }
+        }
+    }
+
+    private void addProcessor(FrameProcessorType type) {
+        frameProcessorTypes.add(type);
+    }
+
+    private void setDisplayId(int requestedDisplayId) {
+        if (displayId != null && displayId != requestedDisplayId) {
+            setError("Only one display option can be used");
+            return;
+        }
+
+        displayId = requestedDisplayId;
+    }
+
+    /**
+     * Retains the first error because it is normally the most useful one.
+     */
+    private void setError(String message) {
+        if (errorMessage == null) {
+            errorMessage = message;
+        }
+    }
+
+    private void printHelp() {
+        System.out.println("Usage: VideoPlayer [options] [video-file]");
+        System.out.println("Options:");
+        System.out.println("  -h, --help         Show this help message");
+        System.out.println("  -a, --audio        Play audio");
+        System.out.println("  -x, --maximise     Open the player maximised");
+        System.out.println("  -1, --monitor-1    Open the player on display 1");
+        System.out.println("  -2, --monitor-2    Open the player on display 2");
+        System.out.println();
+        System.out.println("Frame processors:");
+        System.out.println(
+                "  -n, --number-frames    Render the frame number onto each frame");
+        System.out.println(
+                "  -s, --scratch-frames   Render vertical film scratches");
+        System.out.println(
+                "  -f, --flicker-frames   Randomly dim frames");
+        System.out.println(
+                "  -w, --black-and-white  Convert frames to black and white");
+        System.out.println(
+                "  -y, --yellow-frames    Apply a warmer colour temperature");
+        System.out.println(
+                "  -v, --vignette-frames  Darken the frame edges");
+        System.out.println(
+                "  -d, --dust-frames      Render dust and hair marks");
+        System.out.println(
+                "  -j, --jitter-frames    Randomly displace frames by a few pixels");
+        System.out.println(
+                "  -m, --mottle-frames    Add cloudy emulsion mottling");
+        System.out.println(
+                "  -b, --bleed-frames     Bleed light into frames");
+        System.out.println(
+                "  -p, --pepper-frames    Pepper frames with dark spots/blotches");
+        System.out.println(
+                "Frame processors are applied in command-line order and may be repeated.");
+        System.out.println(
+                "Example: -nssnfwyvdjmbp numbers, scratches twice, numbers again, flickers,");
+        System.out.println(
+                "converts, warms, vignettes, dusts, jitters, mottles, bleeds, then peppers.");
+    }
+}

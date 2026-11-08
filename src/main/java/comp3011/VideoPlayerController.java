@@ -138,4 +138,7 @@ public class VideoPlayerController {
         }
     }
 
-    priva
+    private void onAudioOutputStateChanged(boolean audioOutputEnabled) {
+        view.showAudioEnabled(audioOutputEnabled);
+    }
+}

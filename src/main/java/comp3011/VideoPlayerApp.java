@@ -144,4 +144,9 @@ public class VideoPlayerApp extends Application {
         commandLineController = new CommandLineController(args);
 
         if (!commandLineController.shouldLaunchApplication()) {
-            System.exit(commandLi
+            System.exit(commandLineController.getExitCode());
+        }
+
+        launch(args);
+    }
+}
