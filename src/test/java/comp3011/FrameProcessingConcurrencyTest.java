@@ -92,4 +92,54 @@ class FrameProcessingConcurrencyTest {
                         throw new IllegalStateException(e);
                     }
                 });
-              
+                List<Future<byte[]>> results = new ArrayList<>();
+                for (int number = 1; number <= 8; number++) {
+                    int frameNumber = number;
+                    results.add(workers.submit(() -> {
+                        try (Frame frame = sourceFrame(frameNumber)) {
+                            apply(perWorker.get(), frame, frameNumber);
+                            return pixelBytes(frame);
+                        }
+                    }));
+                }
+                for (int index = 0; index < results.size(); index++) {
+                    assertArrayEquals(expected.get(index), results.get(index).get());
+                }
+            }
+        }
+    }
+
+    private static List<FrameProcessor> copies(List<FrameProcessor> prototypes, InfoVideo video) throws Exception {
+        List<FrameProcessor> result = new ArrayList<>();
+        for (FrameProcessor prototype : prototypes) {
+            FrameProcessor copy = prototype.copyForWorker();
+            copy.initialise(video);
+            result.add(copy);
+        }
+        return result;
+    }
+
+    private static void apply(List<FrameProcessor> processors, Frame frame, int number) throws Exception {
+        InfoFrame info = new InfoFrame(number, number * 41_667L);
+        for (FrameProcessor processor : processors) {
+            processor.process(frame, info);
+        }
+    }
+
+    private static Frame sourceFrame(int number) {
+        Frame frame = new Frame(WIDTH, HEIGHT, Frame.DEPTH_UBYTE, 3);
+        ByteBuffer pixels = (ByteBuffer) frame.image[0];
+        for (int index = 0; index < frame.imageStride * HEIGHT; index++) {
+            pixels.put(index, (byte) ((index * 31 + number * 17) & 0xff));
+        }
+        return frame;
+    }
+
+    private static byte[] pixelBytes(Frame frame) {
+        ByteBuffer source = ((ByteBuffer) frame.image[0]).duplicate();
+        source.clear();
+        byte[] bytes = new byte[frame.imageStride * HEIGHT];
+        source.get(bytes);
+        return bytes;
+    }
+}
