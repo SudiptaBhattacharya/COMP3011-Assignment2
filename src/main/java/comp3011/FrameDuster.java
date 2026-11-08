@@ -47,6 +47,14 @@ public class FrameDuster extends FrameProcessor {
         instanceIndex = nextInstanceIndex++;
     }
 
+    FrameDuster(int instanceIndex) {
+        this.instanceIndex = instanceIndex;
+    }
+
+    int instanceIndex() {
+        return instanceIndex;
+    }
+
     @Override
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);

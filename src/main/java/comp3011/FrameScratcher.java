@@ -44,6 +44,14 @@ public class FrameScratcher extends FrameProcessor {
         instanceIndex = nextInstanceIndex++;
     }
 
+    FrameScratcher(int instanceIndex) {
+        this.instanceIndex = instanceIndex;
+    }
+
+    int instanceIndex() {
+        return instanceIndex;
+    }
+
     @Override
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);

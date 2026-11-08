@@ -55,4 +55,22 @@ public abstract class FrameProcessor {
     }
 
     public abstract void process(Frame frame, InfoFrame info) throws Exception;
+
+    /** Creates an independent instance with the same deterministic seed identity. */
+    FrameProcessor copyForWorker() {
+        return switch (this) {
+            case FrameNumberer ignored -> new FrameNumberer();
+            case FrameScratcher processor -> new FrameScratcher(processor.instanceIndex());
+            case FrameFlickerer processor -> new FrameFlickerer(processor.instanceIndex());
+            case FrameBlackAndWhiter ignored -> new FrameBlackAndWhiter();
+            case FrameYellower ignored -> new FrameYellower();
+            case FrameVignetter ignored -> new FrameVignetter();
+            case FrameDuster processor -> new FrameDuster(processor.instanceIndex());
+            case FrameJitterer processor -> new FrameJitterer(processor.instanceIndex());
+            case FrameMottler processor -> new FrameMottler(processor.instanceIndex());
+            case FrameBleeder ignored -> new FrameBleeder();
+            case FramePepperer processor -> new FramePepperer(processor.instanceIndex());
+            default -> throw new IllegalArgumentException("Unsupported frame processor: " + getClass().getName());
+        };
+    }
 }
