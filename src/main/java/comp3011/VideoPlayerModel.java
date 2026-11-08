@@ -95,7 +95,8 @@ public class VideoPlayerModel {
             Consumer<Image> frameReadyHandler,
             Consumer<String> statusChangedHandler,
             BiConsumer<Boolean, Boolean> playbackStateChangedHandler,
-            Consumer<Boolean> audioOutputStateChangedHandler) {
+            Consumer<Boolean> audioOutputStateChangedHandler,
+            List<FrameProcessorType> frameProcessorTypes) {
         audioOutputEnabled = audioEnabled;
         this.videoSizeChangedHandler = videoSizeChangedHandler;
         this.frameReadyHandler = frameReadyHandler;
@@ -103,16 +104,21 @@ public class VideoPlayerModel {
         this.playbackStateChangedHandler = playbackStateChangedHandler;
         this.audioOutputStateChangedHandler = audioOutputStateChangedHandler;
         this.frameProcessors = new ArrayList<>();
-//        frameProcessors.add(new FrameBleeder());
-//        frameProcessors.add(new FrameScratcher());
-//        frameProcessors.add(new FrameDuster());
-//        frameProcessors.add(new FramePepperer());
-//        frameProcessors.add(new FrameBlackAndWhiter());
-//        frameProcessors.add(new FrameYellower());
-//        frameProcessors.add(new FrameVignetter());
-//        frameProcessors.add(new FrameFlickerer());
-//        frameProcessors.add(new FrameJitterer());
-//        frameProcessors.add(new FrameNumberer());
+        for (FrameProcessorType type : frameProcessorTypes) {
+            frameProcessors.add(switch (type) {
+                case NUMBER -> new FrameNumberer();
+                case SCRATCH -> new FrameScratcher();
+                case FLICKER -> new FrameFlickerer();
+                case BLACK_AND_WHITE -> new FrameBlackAndWhiter();
+                case YELLOW -> new FrameYellower();
+                case VIGNETTE -> new FrameVignetter();
+                case DUST -> new FrameDuster();
+                case JITTER -> new FrameJitterer();
+                case MOTTLE -> new FrameMottler();
+                case BLEED -> new FrameBleeder();
+                case PEPPER -> new FramePepperer();
+            });
+        }
     }
 
     public void play(File file) {
