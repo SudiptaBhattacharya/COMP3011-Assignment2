@@ -15,6 +15,14 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -32,8 +40,8 @@ import javafx.scene.image.Image;
  *
  * <p>
  * Owns the FFmpeg decoder, playback clock, seeking logic, audio scheduling,
- * and frame processing - which it all manages through cooperative multi-tasking
- * on a single thread. It publishes decoded frames and playback state through
+ * and frame processing. Independent frames are processed on a bounded pool of
+ * platform threads. It publishes decoded frames and playback state through
  * callbacks supplied by its owning {@link VideoPlayerController}, keeping it
  * decoupled from the JavaFX view.
  * </p>
@@ -42,9 +50,18 @@ public class VideoPlayerModel {
     private static final long NO_SEEK_REQUEST = -1; // Sentinel value used when no seek position is active.
     private static final long FIVE_SECONDS_US = 5_000_000L;
     private static final long AUDIO_LEAD_NS = 30_000_000L;
+    private static final int WORKER_COUNT = Math.max(1,
+            Math.min(4, Runtime.getRuntime().availableProcessors() - 2));
+    private static final int MAX_IN_FLIGHT_FRAMES = WORKER_COUNT * 2;
 
     private final List<FrameProcessor> frameProcessors;
     private final Queue<PendingAudio> pendingAudio = new ArrayDeque<>();
+    private final Queue<SubmittedFrame> pendingFrames = new ArrayDeque<>();
+    // Platform threads suit CPU-bound effects; virtual threads do not add CPU capacity.
+    private final ThreadPoolExecutor frameExecutor = new ThreadPoolExecutor(
+            WORKER_COUNT, WORKER_COUNT, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(MAX_IN_FLIGHT_FRAMES),
+            Thread.ofPlatform().name("frame-effect-", 0).factory());
     private final BiConsumer<Integer, Integer> videoSizeChangedHandler;
     private final Consumer<Image> frameReadyHandler;
     private final Consumer<String> statusChangedHandler;
@@ -71,6 +88,11 @@ public class VideoPlayerModel {
     private JavaFXFrameConverter converter; // Takes Frame objects to JavaFX Image objects, which can be put on screen.
     private AudioPlayer audioPlayer; // This is ours. It has some real time buffering smarts.
     private PreparedFrame preparedFrame; // Ours, but is just an Image with some meta-data added.
+    private ProcessingContext processingContext;
+    private boolean inputExhausted;
+    private boolean showSeekPreview;
+    private long playbackGeneration;
+    private long nextSequenceNumber;
     private boolean prepareNextFrameQueued; // True only when the event loop needs to call our prepareNextFrame method.
     private boolean playbackOpen; // True when playback is happening.
     private boolean pauseRequested;
@@ -157,6 +179,7 @@ public class VideoPlayerModel {
 
         if (pauseRequested) {
             pauseStartedNs = System.nanoTime();
+            showSeekPreview = false;
             flushAudioOutput();
         } else {
             resumePlaybackClock(System.nanoTime());
@@ -187,6 +210,7 @@ public class VideoPlayerModel {
 
     public void shutdown() {
         closePlaybackResources();
+        frameExecutor.shutdownNow();
     }
 
     private void seekRelative(long offsetUs) {
@@ -276,8 +300,11 @@ public class VideoPlayerModel {
     }
 
     private void resetPlaybackClock(long logicalTimestampUs) {
+        invalidatePendingFrames();
         pendingAudio.clear();
         preparedFrame = null;
+        inputExhausted = false;
+        showSeekPreview = pauseRequested;
         currentTimestampUs = logicalTimestampUs;
         relativeSeekBaseUs = logicalTimestampUs;
         firstTimestampUs = NO_SEEK_REQUEST;
@@ -288,29 +315,39 @@ public class VideoPlayerModel {
 
     private void resumePlaybackClock(long now) {
         if (pauseStartedNs > 0 && playbackStartNs > 0) {
-            playbackStartNs += now - pauseStartedNs;
+            long pauseDurationNs = now - pauseStartedNs;
+            playbackStartNs += pauseDurationNs;
+            if (preparedFrame != null) {
+                PreparedFrame frame = preparedFrame;
+                preparedFrame = new PreparedFrame(frame.image(), frame.frameNumber(),
+                        frame.mediaTimestampUs(), frame.logicalTimestampUs(),
+                        frame.targetTimeNs() + pauseDurationNs, frame.preparedAtNs());
+            }
         }
         pauseStartedNs = 0;
     }
 
     private void prepareNextFrame() {
-        if (!playbackOpen || preparedFrame != null) {
+        if (!playbackOpen || inputExhausted || inFlightFrameCount() >= MAX_IN_FLIGHT_FRAMES) {
             return;
         }
 
         try {
-            preparedFrame = readNextVideoFrame();
+            submitNextVideoFrame();
         } catch (Exception e) {
             handlePlaybackError(e);
         }
     }
 
-    private PreparedFrame readNextVideoFrame() throws Exception {
+    private void submitNextVideoFrame() throws Exception {
         while (playbackOpen) {
             Frame frame = grabFrame();
             if (frame == null) {
-                finishPlayback();
-                return null;
+                inputExhausted = true;
+                if (firstTimestampUs == NO_SEEK_REQUEST) {
+                    finishPlayback();
+                }
+                return;
             }
 
             long timestampUs = grabber.getTimestamp();
@@ -323,7 +360,7 @@ public class VideoPlayerModel {
             }
 
             if (!frameProcessorsInitialised) {
-                initialiseFrameProcessors(new InfoVideo(
+                processingContext = new ProcessingContext(new InfoVideo(
                         mediaName(videoFile),
                         totalVideoFrames,
                         frame.imageWidth,
@@ -334,7 +371,7 @@ public class VideoPlayerModel {
                         frameRate,
                         intFrameRate,
                         videoFrameDurationUs,
-                        grabber.getPixelFormat()));
+                        grabber.getPixelFormat()), frameProcessors);
                 frameProcessorsInitialised = true;
             }
 
@@ -348,59 +385,103 @@ public class VideoPlayerModel {
 
             int frameNumber = grabber.getFrameNumber();
             InfoFrame info = new InfoFrame(frameNumber, timestampUs);
-            processFrame(frame, info);
-
-            Image image = converter.convert(frame);
             long relativeTimestampUs = Math.max(0, timestampUs - firstTimestampUs);
             long logicalTimestampUs = logicalPlaybackBaseUs + relativeTimestampUs;
-            long targetTimeNs = playbackStartNs + relativeTimestampUs * 1_000L;
 
-            return new PreparedFrame(
-                    image,
-                    frameNumber,
-                    timestampUs,
-                    logicalTimestampUs,
-                    targetTimeNs,
-                    System.nanoTime());
+            // FFmpeg may reuse its native image buffer on the next grab. A deep clone
+            // gives the worker exclusive ownership while decoding continues.
+            Frame ownedFrame = frame.clone();
+            FrameJob job = new FrameJob(ownedFrame, info, processingContext,
+                    nextSequenceNumber++, playbackGeneration, logicalTimestampUs, relativeTimestampUs);
+            try {
+                pendingFrames.add(new SubmittedFrame(job, frameExecutor.submit(job)));
+            } catch (RuntimeException e) {
+                job.release();
+                throw e;
+            }
+            return;
         }
-
-        return null;
     }
 
-    // This is called on a heart beat by the GUI thread. We want to be co-operative here by (a) not blocking, and (b)
-    // getting our required work out of the way quickly so that we can return control flow to the JavaFX event loop for
-    // handling user interaction with the GUI and rendering. We have three jobs: (1) keep audio flowing if sound is on,
-    // (2) display a frame if it is due and (3) prepare the next frame if we're in the window after the previous frame
-    // has gone to the display. We don't buffer frames here, just handling them one at a time. Not a great architecture,
-    // living on the edge a bit, but can't do much better on a single thread.
+    // The GUI heartbeat never waits for a worker. It takes only the oldest
+    // completed result, so parallel processing cannot reorder displayed frames.
     private void pumpPlayback(long now) {
         if (!playbackOpen) {
             return;
         }
 
-        // Task (1)
         writeDueAudio(now);
-
-        // Task (2)
-        if (preparedFrame != null && preparedFrame.targetTimeNs() <= now) {
-            // We have a prepared frame ready to go and it is due (or just past due!) so get it up on screen ASAP!
+        collectPreparedFrame();
+        if (!playbackOpen) {
+            return;
+        }
+        if (preparedFrame != null && (showSeekPreview
+                || (!pauseRequested && preparedFrame.targetTimeNs() <= now))) {
             displayPreparedFrame(now);
+            showSeekPreview = false;
         }
 
-        // Task (3). We'll try and be nice to the GUI event loop here by queueing the prepareNextFrame call rather than
-        // hogging the thread and doing it here, hence the tricky callback and use of prepareNextFrameQueued. Feel free
-        // to replace this whole block with simple linear control flow logic
-        // such as: if (!pauseRequested && preparedFrame == null) prepareNextFrame();
-        // to compare.
-        if (!pauseRequested && preparedFrame == null && !prepareNextFrameQueued) {
-            prepareNextFrameQueued = true;
-            Platform.runLater(() -> {
-                prepareNextFrameQueued = false;
+        if (inputExhausted && inFlightFrameCount() == 0 && pendingAudio.isEmpty()) {
+            finishPlayback();
+            return;
+        }
 
+        if (!pauseRequested && !inputExhausted
+                && inFlightFrameCount() < MAX_IN_FLIGHT_FRAMES && !prepareNextFrameQueued) {
+            prepareNextFrameQueued = true;
+            long queuedGeneration = playbackGeneration;
+            Platform.runLater(() -> {
+                if (queuedGeneration != playbackGeneration) {
+                    return;
+                }
+                prepareNextFrameQueued = false;
                 if (!pauseRequested) {
                     prepareNextFrame();
                 }
             });
+        }
+    }
+
+    private int inFlightFrameCount() {
+        return pendingFrames.size() + (preparedFrame == null ? 0 : 1);
+    }
+
+    private void collectPreparedFrame() {
+        if (preparedFrame != null || pendingFrames.isEmpty()) {
+            return;
+        }
+
+        SubmittedFrame submitted = pendingFrames.peek();
+        if (!submitted.future().isDone()) {
+            return;
+        }
+
+        pendingFrames.remove();
+        try {
+            ProcessedFrame result = submitted.future().get();
+            if (result.generation() != playbackGeneration) {
+                submitted.job().release();
+                return;
+            }
+
+            Image image;
+            try {
+                image = converter.convert(submitted.job().frame());
+            } finally {
+                submitted.job().release();
+            }
+            preparedFrame = new PreparedFrame(image, result.info().frameNumber(),
+                    result.info().timestampUs(), result.logicalTimestampUs(),
+                    playbackStartNs + result.relativeTimestampUs() * 1_000L, System.nanoTime());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            handlePlaybackError(e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            handlePlaybackError(cause instanceof Exception exception
+                    ? exception : new Exception("Frame processing failed", cause));
+        } catch (Exception e) {
+            handlePlaybackError(e);
         }
     }
 
@@ -493,13 +574,16 @@ public class VideoPlayerModel {
     private void closePlaybackResources() {
         playbackTimer.stop();
         playbackOpen = false;
-        preparedFrame = null;
+        invalidatePendingFrames();
         pendingAudio.clear();
         firstTimestampUs = NO_SEEK_REQUEST;
         playbackStartNs = 0;
         pauseStartedNs = 0;
         audioAvailable = false;
         frameProcessorsInitialised = false;
+        processingContext = null;
+        inputExhausted = false;
+        showSeekPreview = false;
 
         if (audioPlayer != null) {
             audioPlayer.close();
@@ -524,6 +608,18 @@ public class VideoPlayerModel {
             converter.close();
             converter = null;
         }
+    }
+
+    private void invalidatePendingFrames() {
+        playbackGeneration++;
+        for (SubmittedFrame submitted : pendingFrames) {
+            submitted.job().cancel();
+            submitted.future().cancel(true);
+        }
+        pendingFrames.clear();
+        frameExecutor.purge();
+        preparedFrame = null;
+        prepareNextFrameQueued = false;
     }
 
     private String mediaName(File file) {
@@ -564,15 +660,12 @@ public class VideoPlayerModel {
      * Processing remains sequential within an individual frame because every
      * processor can modify the output produced by the preceding processor.
      */
-    private void processFrame(Frame frame, InfoFrame frameInfo) throws Exception {
-        for (FrameProcessor processor : frameProcessors) {
+    private void processFrame(Frame frame, InfoFrame frameInfo, ProcessingContext context) throws Exception {
+        for (FrameProcessor processor : context.processors()) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Frame processing cancelled");
+            }
             processor.process(frame, frameInfo);
-        }
-    }
-
-    private void initialiseFrameProcessors(InfoVideo videoInfo) throws Exception {
-        for (FrameProcessor processor : frameProcessors) {
-            processor.initialise(videoInfo);
         }
     }
 
@@ -607,6 +700,111 @@ public class VideoPlayerModel {
 
     private void notifyAudioOutputStateChanged() {
         audioOutputStateChangedHandler.accept(audioOutputEnabled);
+    }
+
+    private static final class ProcessingContext {
+        private final ThreadLocal<List<FrameProcessor>> workerProcessors;
+
+        ProcessingContext(InfoVideo videoInfo, List<FrameProcessor> prototypes) {
+            List<FrameProcessor> orderedPrototypes = List.copyOf(prototypes);
+            workerProcessors = ThreadLocal.withInitial(() -> {
+                List<FrameProcessor> copies = new ArrayList<>(orderedPrototypes.size());
+                try {
+                    for (FrameProcessor prototype : orderedPrototypes) {
+                        FrameProcessor copy = prototype.copyForWorker();
+                        copy.initialise(videoInfo);
+                        copies.add(copy);
+                    }
+                } catch (Exception e) {
+                    throw new CompletionException("Frame processor initialisation failed", e);
+                }
+                return List.copyOf(copies);
+            });
+        }
+
+        List<FrameProcessor> processors() {
+            return workerProcessors.get();
+        }
+    }
+
+    private final class FrameJob implements Callable<ProcessedFrame> {
+        private static final int NEW = 0;
+        private static final int RUNNING = 1;
+        private static final int DONE = 2;
+        private static final int RELEASED = 3;
+
+        private final Frame frame;
+        private final InfoFrame info;
+        private final ProcessingContext context;
+        private final long sequenceNumber;
+        private final long generation;
+        private final long logicalTimestampUs;
+        private final long relativeTimestampUs;
+        private final AtomicInteger lifecycle = new AtomicInteger(NEW);
+        private volatile boolean cancelled;
+
+        FrameJob(Frame frame, InfoFrame info, ProcessingContext context,
+                long sequenceNumber, long generation, long logicalTimestampUs, long relativeTimestampUs) {
+            this.frame = frame;
+            this.info = info;
+            this.context = context;
+            this.sequenceNumber = sequenceNumber;
+            this.generation = generation;
+            this.logicalTimestampUs = logicalTimestampUs;
+            this.relativeTimestampUs = relativeTimestampUs;
+        }
+
+        Frame frame() {
+            return frame;
+        }
+
+        @Override
+        public ProcessedFrame call() throws Exception {
+            if (!lifecycle.compareAndSet(NEW, RUNNING)) {
+                return null;
+            }
+            try {
+                // Effects on one frame depend on preceding effects; separate frames do not.
+                processFrame(frame, info, context);
+                ProcessedFrame result = new ProcessedFrame(sequenceNumber, generation,
+                        info, logicalTimestampUs, relativeTimestampUs);
+                lifecycle.set(DONE);
+                if (cancelled) {
+                    release();
+                }
+                return result;
+            } catch (Exception | Error e) {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                lifecycle.set(DONE);
+                release();
+                throw e;
+            }
+        }
+
+        void cancel() {
+            cancelled = true;
+            release();
+        }
+
+        void release() {
+            int state = lifecycle.get();
+            while (state == NEW || state == DONE) {
+                if (lifecycle.compareAndSet(state, RELEASED)) {
+                    frame.close();
+                    return;
+                }
+                state = lifecycle.get();
+            }
+        }
+    }
+
+    private record SubmittedFrame(FrameJob job, Future<ProcessedFrame> future) {
+    }
+
+    private record ProcessedFrame(long sequenceNumber, long generation, InfoFrame info,
+            long logicalTimestampUs, long relativeTimestampUs) {
     }
 
     private record PreparedFrame(
