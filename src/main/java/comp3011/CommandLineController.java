@@ -227,6 +227,8 @@ public class CommandLineController {
 
     private void printHelp() {
         System.out.println("Usage: VideoPlayer [options] [video-file]");
+        System.out.println();
+
         System.out.println("Options:");
         System.out.println("  -h, --help         Show this help message");
         System.out.println("  -a, --audio        Play audio");
@@ -234,6 +236,7 @@ public class CommandLineController {
         System.out.println("  -1, --monitor-1    Open the player on display 1");
         System.out.println("  -2, --monitor-2    Open the player on display 2");
         System.out.println();
+
         System.out.println("Frame processors:");
         System.out.println(
                 "  -n, --number-frames    Render the frame number onto each frame");
@@ -257,6 +260,8 @@ public class CommandLineController {
                 "  -b, --bleed-frames     Bleed light into frames");
         System.out.println(
                 "  -p, --pepper-frames    Pepper frames with dark spots/blotches");
+        System.out.println();
+
         System.out.println(
                 "Frame processors are applied in command-line order and may be repeated.");
         System.out.println(
