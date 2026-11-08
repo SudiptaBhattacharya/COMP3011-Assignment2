@@ -16,12 +16,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -56,12 +52,9 @@ public class VideoPlayerModel {
 
     private final List<FrameProcessor> frameProcessors;
     private final Queue<PendingAudio> pendingAudio = new ArrayDeque<>();
-    private final Queue<SubmittedFrame> pendingFrames = new ArrayDeque<>();
     // Platform threads suit CPU-bound effects; virtual threads do not add CPU capacity.
-    private final ThreadPoolExecutor frameExecutor = new ThreadPoolExecutor(
-            WORKER_COUNT, WORKER_COUNT, 0L, TimeUnit.MILLISECONDS,
-            new ArrayBlockingQueue<>(MAX_IN_FLIGHT_FRAMES),
-            Thread.ofPlatform().name("frame-effect-", 0).factory());
+    private final OrderedFrameExecutor<ProcessedFrame> pendingFrames =
+            new OrderedFrameExecutor<>(WORKER_COUNT, MAX_IN_FLIGHT_FRAMES);
     private final BiConsumer<Integer, Integer> videoSizeChangedHandler;
     private final Consumer<Image> frameReadyHandler;
     private final Consumer<String> statusChangedHandler;
@@ -91,8 +84,6 @@ public class VideoPlayerModel {
     private ProcessingContext processingContext;
     private boolean inputExhausted;
     private boolean showSeekPreview;
-    private long playbackGeneration;
-    private long nextSequenceNumber;
     private boolean prepareNextFrameQueued; // True only when the event loop needs to call our prepareNextFrame method.
     private boolean playbackOpen; // True when playback is happening.
     private boolean pauseRequested;
@@ -210,7 +201,7 @@ public class VideoPlayerModel {
 
     public void shutdown() {
         closePlaybackResources();
-        frameExecutor.shutdownNow();
+        pendingFrames.close();
     }
 
     private void seekRelative(long offsetUs) {
@@ -392,9 +383,9 @@ public class VideoPlayerModel {
             // gives the worker exclusive ownership while decoding continues.
             Frame ownedFrame = frame.clone();
             FrameJob job = new FrameJob(ownedFrame, info, processingContext,
-                    nextSequenceNumber++, playbackGeneration, logicalTimestampUs, relativeTimestampUs);
+                    pendingFrames.generation(), logicalTimestampUs, relativeTimestampUs);
             try {
-                pendingFrames.add(new SubmittedFrame(job, frameExecutor.submit(job)));
+                pendingFrames.submit(job, job::cancel);
             } catch (RuntimeException e) {
                 job.release();
                 throw e;
@@ -429,9 +420,9 @@ public class VideoPlayerModel {
         if (!pauseRequested && !inputExhausted
                 && inFlightFrameCount() < MAX_IN_FLIGHT_FRAMES && !prepareNextFrameQueued) {
             prepareNextFrameQueued = true;
-            long queuedGeneration = playbackGeneration;
+            long queuedGeneration = pendingFrames.generation();
             Platform.runLater(() -> {
-                if (queuedGeneration != playbackGeneration) {
+                if (queuedGeneration != pendingFrames.generation()) {
                     return;
                 }
                 prepareNextFrameQueued = false;
@@ -443,32 +434,31 @@ public class VideoPlayerModel {
     }
 
     private int inFlightFrameCount() {
-        return pendingFrames.size() + (preparedFrame == null ? 0 : 1);
+        return pendingFrames.outstanding() + (preparedFrame == null ? 0 : 1);
     }
 
     private void collectPreparedFrame() {
-        if (preparedFrame != null || pendingFrames.isEmpty()) {
+        if (preparedFrame != null) {
             return;
         }
 
-        SubmittedFrame submitted = pendingFrames.peek();
-        if (!submitted.future().isDone()) {
-            return;
-        }
-
-        pendingFrames.remove();
         try {
-            ProcessedFrame result = submitted.future().get();
-            if (result.generation() != playbackGeneration) {
-                submitted.job().release();
+            OrderedFrameExecutor.Completed<ProcessedFrame> completed = pendingFrames.pollCompleted();
+            if (completed == null) {
+                return;
+            }
+            ProcessedFrame result = completed.value();
+            if (completed.generation() != pendingFrames.generation()
+                    || result.generation() != pendingFrames.generation()) {
+                result.job().release();
                 return;
             }
 
             Image image;
             try {
-                image = converter.convert(submitted.job().frame());
+                image = converter.convert(result.job().frame());
             } finally {
-                submitted.job().release();
+                result.job().release();
             }
             preparedFrame = new PreparedFrame(image, result.info().frameNumber(),
                     result.info().timestampUs(), result.logicalTimestampUs(),
@@ -611,13 +601,7 @@ public class VideoPlayerModel {
     }
 
     private void invalidatePendingFrames() {
-        playbackGeneration++;
-        for (SubmittedFrame submitted : pendingFrames) {
-            submitted.job().cancel();
-            submitted.future().cancel(true);
-        }
-        pendingFrames.clear();
-        frameExecutor.purge();
+        pendingFrames.invalidate();
         preparedFrame = null;
         prepareNextFrameQueued = false;
     }
@@ -736,7 +720,6 @@ public class VideoPlayerModel {
         private final Frame frame;
         private final InfoFrame info;
         private final ProcessingContext context;
-        private final long sequenceNumber;
         private final long generation;
         private final long logicalTimestampUs;
         private final long relativeTimestampUs;
@@ -744,11 +727,10 @@ public class VideoPlayerModel {
         private volatile boolean cancelled;
 
         FrameJob(Frame frame, InfoFrame info, ProcessingContext context,
-                long sequenceNumber, long generation, long logicalTimestampUs, long relativeTimestampUs) {
+                long generation, long logicalTimestampUs, long relativeTimestampUs) {
             this.frame = frame;
             this.info = info;
             this.context = context;
-            this.sequenceNumber = sequenceNumber;
             this.generation = generation;
             this.logicalTimestampUs = logicalTimestampUs;
             this.relativeTimestampUs = relativeTimestampUs;
@@ -766,7 +748,7 @@ public class VideoPlayerModel {
             try {
                 // Effects on one frame depend on preceding effects; separate frames do not.
                 processFrame(frame, info, context);
-                ProcessedFrame result = new ProcessedFrame(sequenceNumber, generation,
+                ProcessedFrame result = new ProcessedFrame(this, generation,
                         info, logicalTimestampUs, relativeTimestampUs);
                 lifecycle.set(DONE);
                 if (cancelled) {
@@ -800,10 +782,7 @@ public class VideoPlayerModel {
         }
     }
 
-    private record SubmittedFrame(FrameJob job, Future<ProcessedFrame> future) {
-    }
-
-    private record ProcessedFrame(long sequenceNumber, long generation, InfoFrame info,
+    private record ProcessedFrame(FrameJob job, long generation, InfoFrame info,
             long logicalTimestampUs, long relativeTimestampUs) {
     }
 
