@@ -101,14 +101,4 @@ Results are collected in submission order, then converted to JavaFX images and d
 
 ## Testing
 
-Run the automated and manual checks in [TESTING.md](TESTING.md). The Maven unit tests cover parsing, frame ownership, deterministic concurrent output, ordered completion, the in-flight limit, cancellation, shutdown, and worker failures. `./mvnw verify` also runs an effect-processing comparison on identical frames with one sequential chain, four workers and seven workers. On this machine it uses `~/Downloads/simpsons.mp4` if available; set `-Dcomp3011.benchmarkVideo=/absolute/path/to/video.mp4` to choose another file. If no video is available, the benchmark uses synthetic frames. It checks output equality and reports times; it does not assert a speedup.
-
-The model prints frame headroom during playback. Positive values mean a frame was prepared before its target display time; negative values mean it was late. Headroom, effect throughput, audio continuity and visible smoothness measure different aspects of performance. A short positive sample alone does not establish an end-to-end speedup.
-
-## Current project status
-
-Part 1 and the bounded Part 2 frame-processing architecture are implemented. Direct visual, audio and interactive checks, plus a controlled end-to-end comparison against the single-threaded player, remain part of the verification procedure in [TESTING.md](TESTING.md).
-
-## AI-use disclosure
-
-Generative AI was used as a learning and development aid for command-line parsing, concurrency design, Java/Maven diagnostics, tests and documentation. Suggestions were reviewed against the project code, compiled, and checked with automated tests and playback smoke runs. Direct interactive observations are identified separately in the testing record.
+Run the automated and manual checks in [TESTING.md](TESTING.md). The Maven unit tests cover parsing, frame ownership, deterministic concurrent output, ordered completion, the in-flight limit, cancellation, shutdown, and worker failures. `./mvnw verify` also runs an effect-processing comparison on identical frames with one sequential chain, four workers and seven workers. On this machine it uses `~/Downloads/simpso

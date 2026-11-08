@@ -263,7 +263,7 @@ A second `./mvnw verify` pass measured **635.2 ms sequential, 192.7 ms with four
 
 An isolated worktree at commit `700f081` was also run with the same machine, video, `-a` setting and full stack. Captured logs are `/tmp/comp3011-single-thread-baseline.log` and `/tmp/comp3011-multi-thread-result.log`. The baseline capture had 20 headroom samples, none negative, with a 15.5 ms median. The concurrent capture had 120 samples, including 10 negative startup samples; its last 20 had a 16.9 ms median. The captures covered different lengths and the concurrent run had a longer startup delay, so they are **not** evidence of end-to-end speedup. Repeat equal playback intervals under similar starting conditions for a fair player comparison.
 
-For a controlled *player* comparison, use an isolated worktree at the last single-threaded commit and capture the same playback period:
+For a controlled *player* comparison, used an isolated worktree at the last single-threaded commit and captured the same playback period:
 
 ```sh
 git worktree add ../VideoPlayerSingleThread-baseline 700f081
