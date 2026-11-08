@@ -558,9 +558,15 @@ public class VideoPlayerModel {
         return Math.max(0, durationUs - frameDurationUs);
     }
 
-    private void processFrame(Frame frame, InfoFrame info) throws Exception {
+    /**
+     * Applies every selected processor to one frame in command-line order.
+     *
+     * Processing remains sequential within an individual frame because every
+     * processor can modify the output produced by the preceding processor.
+     */
+    private void processFrame(Frame frame, InfoFrame frameInfo) throws Exception {
         for (FrameProcessor processor : frameProcessors) {
-            processor.process(frame, info);
+            processor.process(frame, frameInfo);
         }
     }
 
