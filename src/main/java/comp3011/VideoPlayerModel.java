@@ -634,16 +634,3 @@ public class VideoPlayerModel {
             return offset;
         }
 
-        int remaining() {
-            return samples.length - offset;
-        }
-
-        void advance(int byteCount) {
-            offset += byteCount;
-        }
-
-        boolean finished() {
-            return offset >= samples.length;
-        }
-    }
-}
